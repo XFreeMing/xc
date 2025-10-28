@@ -376,7 +376,7 @@ elif page == "试卷生成":
             )
 
     with col2:
-        question_count = st.number_input("题目数量", min_value=1, value=10, step=1)
+        question_count = st.number_input("题目数量", min_value=1, value=30, step=1)
         paper_title = st.text_input(
             "试卷标题", value=f"虚词练习 {datetime.now().strftime('%Y-%m-%d')}"
         )
