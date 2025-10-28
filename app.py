@@ -1,13 +1,14 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 
+import io
 import random
 from datetime import datetime
 
 import streamlit as st
 from docx import Document
 from docx.enum.text import WD_ALIGN_PARAGRAPH
-from docx.shared import Inches, Pt
+from docx.shared import Inches
 
 from database import Database
 
@@ -130,7 +131,7 @@ if page == "数据管理":
                 with col3:
                     if st.button("删除", key=f"delete_{action['id']}"):
                         db.delete_empty_word_action(action["id"])
-                        st.success(f"已删除")
+                        st.success("已删除")
                         st.rerun()
 
                 # 内联编辑
@@ -380,7 +381,83 @@ elif page == "试卷生成":
             "试卷标题", value=f"虚词练习 {datetime.now().strftime('%Y-%m-%d')}"
         )
 
-    if st.button("生成试卷", type="primary"):
+    col_btn1, col_btn2 = st.columns(2)
+    with col_btn1:
+        generate_button = st.button(
+            "生成试卷", type="primary", use_container_width=True
+        )
+    with col_btn2:
+        export_word_button = st.button(
+            "📥 直接导出 Word", type="secondary", use_container_width=True
+        )
+
+    if export_word_button:
+        # 直接导出 Word 的逻辑
+        if question_count > 0:
+            # 获取符合条件的例句
+            sentences = db.get_all_example_sentences()
+
+            # 过滤例句
+            filtered_sentences = []
+            for sentence in sentences:
+                if (
+                    filter_empty_words
+                    and sentence["empty_word"] not in filter_empty_words
+                ):
+                    continue
+
+                # 检查词性
+                if filter_pos:
+                    sentence_actions = db.get_all_empty_word_actions(
+                        sentence["empty_word"]
+                    )
+                    if not any(
+                        action["part_of_speech"] in filter_pos
+                        for action in sentence_actions
+                    ):
+                        continue
+
+                filtered_sentences.append(sentence)
+
+            if len(filtered_sentences) == 0:
+                st.error("没有符合条件的例句")
+            else:
+                # 随机打乱例句顺序（不按数据库顺序）
+                random.shuffle(filtered_sentences)
+
+                # 随机选择例句
+                selected_sentences = random.sample(
+                    filtered_sentences, min(question_count, len(filtered_sentences))
+                )
+
+                # 生成 Word 文档（使用已导入的模块）
+                doc = Document()
+
+                # 标题
+                title = doc.add_heading(paper_title, 0)
+                title.alignment = WD_ALIGN_PARAGRAPH.CENTER
+                doc.add_paragraph()
+
+                # 只添加例句，无其他内容
+                for i, sentence in enumerate(selected_sentences, 1):
+                    para = doc.add_paragraph(f"{i}. ", style="Normal")
+                    para.add_run(sentence["sentence"])
+
+                # 保存到内存
+                doc_io = io.BytesIO()
+                doc.save(doc_io)
+                doc_bytes = doc_io.getvalue()
+
+                # 提供下载
+                st.download_button(
+                    "📥 下载试卷",
+                    doc_bytes,
+                    f"{paper_title}.docx",
+                    "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                    key="direct_export_download",
+                )
+
+    if generate_button:
         if question_count > 0:
             # 获取符合条件的例句
             sentences = db.get_all_example_sentences()
@@ -598,7 +675,11 @@ else:  # 试卷列表
                             para = doc.add_paragraph(answer_text)
                             para.paragraph_format.left_indent = Inches(0.5)
 
-                    doc.add_paragraph()  # 空行
+                    # 只有在有选项或答案时才添加空行（默认导出版面更紧凑）
+                    if show_options and question_data.get("options"):
+                        doc.add_paragraph()  # 空行
+                    elif show_answer:
+                        doc.add_paragraph()  # 空行
 
                 # 保存到内存
                 filename = f"{paper['title']}.docx"
