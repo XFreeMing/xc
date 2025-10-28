@@ -88,7 +88,9 @@ db = get_db()
 st.sidebar.title("虚词大战")
 st.sidebar.markdown("---")
 
-page = st.sidebar.radio("选择功能", ["数据管理", "例句管理", "试卷生成", "试卷列表"])
+page = st.sidebar.radio(
+    "选择功能", ["数据管理", "例句管理", "试卷生成", "试卷列表"], index=2
+)
 
 if page == "数据管理":
     st.title("虚词用法管理")
@@ -332,10 +334,12 @@ elif page == "试卷生成":
 
     col1, col2 = st.columns(2)
     with col1:
-        # 添加全选选项
+        # 添加全选选项（默认全选）
         all_words_plus = ["全选"] + EMPTY_WORDS
+        # 如果没有选择，默认选择"全选"
+        default_words = st.session_state.get("filter_words_gen_default", ["全选"])
         filter_empty_words_selected = st.multiselect(
-            "虚词", all_words_plus, key="filter_words_gen"
+            "虚词", all_words_plus, default=default_words, key="filter_words_gen"
         )
 
         # 处理全选逻辑
@@ -352,25 +356,35 @@ elif page == "试卷生成":
                 if action["empty_word"] in filter_empty_words:
                     all_pos.add(action["part_of_speech"])
 
-        # 显示中文词性供选择
+        # 显示中文词性供选择（默认全选）
         pos_display_options = ["全选"] + sorted(
             [get_pos_display(pos) for pos in all_pos]
         )
-        filter_pos_zh = st.multiselect("词性", pos_display_options, key="filter_pos")
+        # 默认选择所有词性
+        filter_pos_zh = st.multiselect(
+            "词性", pos_display_options, default=pos_display_options, key="filter_pos"
+        )
 
         # 处理词性全选逻辑
         if "全选" in filter_pos_zh and filter_pos_zh:
-            # 选择了全选
+            # 选择了全选，获取所有不包含"全选"的词性
             pos_display_options_filtered = [
                 p for p in pos_display_options if p != "全选"
             ]
+            # 只转换真实词性，排除"全选"
             filter_pos = [
-                PART_OF_SPEECH_EN[pos_zh] for pos_zh in pos_display_options_filtered
+                PART_OF_SPEECH_EN[pos_zh]
+                for pos_zh in pos_display_options_filtered
+                if pos_zh != "全选" and pos_zh in PART_OF_SPEECH_EN
             ]
         else:
-            # 转换为英文用于查询
+            # 转换为英文用于查询，排除"全选"
             filter_pos = (
-                [PART_OF_SPEECH_EN[pos_zh] for pos_zh in filter_pos_zh]
+                [
+                    PART_OF_SPEECH_EN[pos_zh]
+                    for pos_zh in filter_pos_zh
+                    if pos_zh != "全选" and pos_zh in PART_OF_SPEECH_EN
+                ]
                 if filter_pos_zh
                 else []
             )
@@ -381,17 +395,12 @@ elif page == "试卷生成":
             "试卷标题", value=f"虚词练习 {datetime.now().strftime('%Y-%m-%d')}"
         )
 
-    col_btn1, col_btn2 = st.columns(2)
-    with col_btn1:
-        generate_button = st.button(
-            "生成试卷", type="primary", use_container_width=True
-        )
-    with col_btn2:
-        export_word_button = st.button(
-            "📥 直接导出 Word", type="secondary", use_container_width=True
-        )
+    # 统一的生成并导出按钮
+    generate_and_export_button = st.button(
+        "📥 生成并导出 Word 试卷", type="primary", use_container_width=True
+    )
 
-    if export_word_button:
+    if generate_and_export_button:
         # 直接导出 Word 的逻辑
         if question_count > 0:
             # 获取符合条件的例句
@@ -430,72 +439,7 @@ elif page == "试卷生成":
                     filtered_sentences, min(question_count, len(filtered_sentences))
                 )
 
-                # 生成 Word 文档（使用已导入的模块）
-                doc = Document()
-
-                # 标题
-                title = doc.add_heading(paper_title, 0)
-                title.alignment = WD_ALIGN_PARAGRAPH.CENTER
-                doc.add_paragraph()
-
-                # 只添加例句，无其他内容
-                for i, sentence in enumerate(selected_sentences, 1):
-                    para = doc.add_paragraph(f"{i}. ", style="Normal")
-                    para.add_run(sentence["sentence"])
-
-                # 保存到内存
-                doc_io = io.BytesIO()
-                doc.save(doc_io)
-                doc_bytes = doc_io.getvalue()
-
-                # 提供下载
-                st.download_button(
-                    "📥 下载试卷",
-                    doc_bytes,
-                    f"{paper_title}.docx",
-                    "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-                    key="direct_export_download",
-                )
-
-    if generate_button:
-        if question_count > 0:
-            # 获取符合条件的例句
-            sentences = db.get_all_example_sentences()
-
-            # 过滤例句
-            filtered_sentences = []
-            for sentence in sentences:
-                if (
-                    filter_empty_words
-                    and sentence["empty_word"] not in filter_empty_words
-                ):
-                    continue
-
-                # 检查词性
-                if filter_pos:
-                    sentence_actions = db.get_all_empty_word_actions(
-                        sentence["empty_word"]
-                    )
-                    if not any(
-                        action["part_of_speech"] in filter_pos
-                        for action in sentence_actions
-                    ):
-                        continue
-
-                filtered_sentences.append(sentence)
-
-            if len(filtered_sentences) == 0:
-                st.error("没有符合条件的例句")
-            else:
-                # 随机打乱例句顺序（不按数据库顺序）
-                random.shuffle(filtered_sentences)
-
-                # 随机选择例句
-                selected_sentences = random.sample(
-                    filtered_sentences, min(question_count, len(filtered_sentences))
-                )
-
-                # 为每个句子生成题目
+                # 为每个句子生成题目（包含选项）
                 questions = []
                 for sentence in selected_sentences:
                     # 获取正确答案
@@ -540,10 +484,74 @@ elif page == "试卷生成":
                             }
                         )
 
-                # 创建试卷
+                # 生成包含选项和答案的 Word 文档
+                doc = Document()
+
+                # 标题
+                title = doc.add_heading(paper_title, 0)
+                title.alignment = WD_ALIGN_PARAGRAPH.CENTER
+                doc.add_paragraph()
+
+                # 获取试卷数据用于生成文档
+                paper_data = {
+                    "questions": [
+                        {
+                            "sentence": s["sentence"],
+                            "action_id": s.get("action_ids", [0])[0]
+                            if s.get("action_ids")
+                            else None,
+                            "options": [],
+                        }
+                        for s in selected_sentences[:question_count]
+                    ]
+                }
+
+                # 为每个问题添加选项
+                for i, (sentence_data, q) in enumerate(
+                    zip(selected_sentences, questions), 1
+                ):
+                    sentence = sentence_data["sentence"]
+
+                    # 题号
+                    para = doc.add_paragraph(f"{i}. ", style="Normal")
+                    para.add_run(sentence)
+
+                    # 添加选项（包含作用和意思）
+                    for j, option_data in enumerate(q["options"], 1):
+                        action_id = option_data["action_id"]
+                        action = db.get_empty_word_action(action_id)
+                        if action:
+                            action_text = action["action"]
+                            translation = action.get("translation", "")
+                            if translation:
+                                option_text = (
+                                    f"{chr(96 + j)}. {action_text}（{translation}）"
+                                )
+                            else:
+                                option_text = f"{chr(96 + j)}. {action_text}"
+
+                            doc.add_paragraph(option_text)
+
+                    doc.add_paragraph()  # 空行
+
+                # 保存到内存并创建试卷
+                doc_io = io.BytesIO()
+                doc.save(doc_io)
+                doc_bytes = doc_io.getvalue()
+
+                # 创建试卷到数据库
                 paper_id = db.create_paper(paper_title, questions)
-                st.success(f"试卷创建成功！ID: {paper_id}")
-                st.rerun()
+
+                st.success(f"试卷已生成并保存到数据库！ID: {paper_id}")
+
+                # 提供下载
+                st.download_button(
+                    "📥 下载试卷",
+                    doc_bytes,
+                    f"{paper_title}.docx",
+                    "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                    key="export_download",
+                )
         else:
             st.error("题目数量必须大于0")
 
