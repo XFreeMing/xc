@@ -4,4 +4,6 @@ version = "0.1.0"
 description = "Add your description here"
 readme = "README.md"
 requires-python = ">=3.13"
-dependencies = []
+dependencies = ["python-docx>=1.2.0", "streamlit>=1.50.0"]
+[tool.uv] # 解决的问题：依赖走国内镜像
+index-url = "https://mirrors.aliyun.com/pypi/simple"
