@@ -89,7 +89,7 @@ st.sidebar.title("虚词大战")
 st.sidebar.markdown("---")
 
 page = st.sidebar.radio(
-    "选择功能", ["数据管理", "例句管理", "试卷生成", "试卷列表"], index=2
+    "选择功能", ["数据管理", "例句管理", "试卷生成", "试卷列表", "句子管理"], index=4
 )
 
 if page == "数据管理":
@@ -741,3 +741,171 @@ else:  # 试卷列表
                             option_text += " ✓"
 
                         st.markdown(option_text)
+
+if page == "句子管理":
+    st.title("句子管理")
+
+    col_search, col_add = st.columns([2, 1])
+
+    with col_search:
+        # 虚词筛选（多选）
+        filter_empty_words = st.multiselect(
+            "按虚词筛选（可选多个）", EMPTY_WORDS, key="filter_sentence_words"
+        )
+
+    with col_add:
+        st.markdown("<br>", unsafe_allow_html=True)
+        st.markdown("---")
+        with st.expander("添加新句子", expanded=False):
+            new_sentence = st.text_input("句子内容")
+            new_nos = st.text_input("序号（逗号分隔）", placeholder="例如: 1,2,3")
+            new_tags = st.text_input("标签（逗号分隔）", placeholder="例如: 常见,重要")
+
+            if st.button("添加句子"):
+                if new_sentence:
+                    nos_list = (
+                        [int(n.strip()) for n in new_nos.split(",") if n.strip()]
+                        if new_nos
+                        else []
+                    )
+                    tags_list = (
+                        [t.strip() for t in new_tags.split(",") if t.strip()]
+                        if new_tags
+                        else []
+                    )
+                    db.create_sentence(new_sentence, nos_list, tags_list)
+                    st.success("添加成功")
+                    st.rerun()
+                else:
+                    st.error("请输入句子内容")
+
+    # 获取并显示句子列表
+    # 如果有多个虚词筛选，需要合并结果
+    if filter_empty_words:
+        # 收集所有符合任一虚词的句子
+        all_sentences = {}
+        for word in filter_empty_words:
+            for sentence in db.get_all_sentences(word):
+                all_sentences[sentence["id"]] = sentence
+        sentences = list(all_sentences.values())
+    else:
+        sentences = db.get_all_sentences()
+
+    st.markdown(f"### 共 {len(sentences)} 个句子")
+
+    # 导出选项
+    col_export1, col_export2 = st.columns(2)
+    with col_export1:
+        export_count = st.number_input(
+            "导出数量", min_value=1, value=30, step=1, key="sentence_export_count"
+        )
+    with col_export2:
+        export_title = st.text_input(
+            "文档标题", value="句子练习", key="sentence_export_title"
+        )
+
+    if st.button("随机导出到 Word", type="primary", use_container_width=True):
+        if len(sentences) > 0:
+            # 随机选择句子
+            import random
+
+            selected_sentences = random.sample(
+                sentences, min(export_count, len(sentences))
+            )
+
+            # 生成 Word 文档
+            doc = Document()
+
+            # 标题
+            title = doc.add_heading(export_title, 0)
+            title.alignment = WD_ALIGN_PARAGRAPH.CENTER
+            doc.add_paragraph()
+
+            # 添加句子
+            for i, sentence in enumerate(selected_sentences, 1):
+                para = doc.add_paragraph(f"{i}. ", style="Normal")
+                para.add_run(sentence["sentence"])
+
+            # 保存到内存
+            doc_io = io.BytesIO()
+            doc.save(doc_io)
+            doc_bytes = doc_io.getvalue()
+
+            st.success(f"已生成 {len(selected_sentences)} 个句子的Word文档")
+
+            # 提供下载
+            st.download_button(
+                "📥 下载文档",
+                doc_bytes,
+                f"{export_title}.docx",
+                "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                key="sentence_export_download",
+                use_container_width=True,
+            )
+        else:
+            st.error("没有可导出的句子")
+
+    # 显示句子列表（表格形式）
+    st.markdown("---")
+    st.markdown("### 句子列表")
+
+    if len(sentences) > 0:
+        # 准备表格数据
+        import pandas as pd
+
+        table_data = []
+        for sentence in sentences:
+            table_data.append(
+                {
+                    "ID": sentence["id"],
+                    "句子": sentence["sentence"],
+                    "序号": ", ".join(map(str, sentence["nos"]))
+                    if sentence["nos"]
+                    else "",
+                    "标签": ", ".join(sentence["tags"]) if sentence["tags"] else "",
+                }
+            )
+
+        df = pd.DataFrame(table_data)
+
+        # 显示表格
+        st.dataframe(
+            df,
+            use_container_width=True,
+            hide_index=True,
+            column_config={
+                "ID": st.column_config.NumberColumn("ID", width="small"),
+                "句子": st.column_config.TextColumn("句子", width="large"),
+                "序号": st.column_config.TextColumn("序号", width="medium"),
+                "标签": st.column_config.TextColumn("标签", width="medium"),
+            },
+        )
+
+        # 批量操作
+        with st.expander("批量操作", expanded=False):
+            col_del1, col_del2 = st.columns([3, 1])
+
+            with col_del1:
+                ids_to_delete = st.text_input(
+                    "删除句子ID（逗号分隔）", placeholder="例如: 1,2,3"
+                )
+
+            with col_del2:
+                st.markdown("<br>", unsafe_allow_html=True)
+                if st.button("批量删除", type="secondary"):
+                    if ids_to_delete:
+                        try:
+                            ids = [int(id.strip()) for id in ids_to_delete.split(",")]
+                            deleted_count = 0
+                            for sentence_id in ids:
+                                try:
+                                    db.delete_sentence(sentence_id)
+                                    deleted_count += 1
+                                except Exception:
+                                    pass
+                            st.success(f"已删除 {deleted_count} 个句子")
+                            st.rerun()
+                        except Exception:
+                            st.error("请输入正确的ID格式")
+    else:
+        st.info("没有句子数据")

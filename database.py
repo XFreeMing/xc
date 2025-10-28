@@ -30,15 +30,25 @@ class Database:
             )
         """)
 
+        # Sentence 表（句子基础表）
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS sentence (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                sentence TEXT NOT NULL UNIQUE,
+                nos TEXT NOT NULL,
+                tags TEXT
+            )
+        """)
+
         # ExampleSentence 表
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS example_sentence (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
-                sentence TEXT NOT NULL,
-                tags TEXT,
+                sentence_id INTEGER NOT NULL,
                 empty_word TEXT NOT NULL,
                 action_id INTEGER,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (sentence_id) REFERENCES sentence(id),
                 FOREIGN KEY (action_id) REFERENCES empty_word_action(id)
             )
         """)
@@ -174,6 +184,81 @@ class Database:
         with self.get_connection() as conn:
             cursor = conn.cursor()
             cursor.execute("DELETE FROM empty_word_action WHERE id = ?", (action_id,))
+
+    # Sentence CRUD
+    def create_sentence(self, sentence: str, nos: List[int], tags: List[str] = None):
+        """创建句子"""
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+            nos_str = ",".join(map(str, nos))
+            tags_str = ",".join(tags) if tags else ""
+
+            cursor.execute(
+                """
+                INSERT OR REPLACE INTO sentence (sentence, nos, tags)
+                VALUES (?, ?, ?)
+            """,
+                (sentence, nos_str, tags_str),
+            )
+            return cursor.lastrowid
+
+    def get_all_sentences(self, empty_word_filter: Optional[str] = None):
+        """获取所有句子，支持虚词模糊搜索"""
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+
+            if empty_word_filter:
+                # 如果指定了虚词，查找包含该虚词的句子
+                cursor.execute(
+                    """
+                    SELECT DISTINCT s.* 
+                    FROM sentence s
+                    JOIN example_sentence es ON s.id = es.sentence_id
+                    WHERE es.empty_word = ?
+                    ORDER BY s.id
+                """,
+                    (empty_word_filter,),
+                )
+            else:
+                cursor.execute("SELECT * FROM sentence ORDER BY id")
+
+            sentences = []
+            for row in cursor.fetchall():
+                sentence = dict(row)
+                sentence["nos"] = (
+                    [int(n) for n in row["nos"].split(",")] if row["nos"] else []
+                )
+                sentence["tags"] = row["tags"].split(",") if row["tags"] else []
+                sentences.append(sentence)
+
+            return sentences
+
+    def update_sentence(
+        self, sentence_id: int, sentence: str, nos: List[int], tags: List[str] = None
+    ):
+        """更新句子"""
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+            nos_str = ",".join(map(str, nos))
+            tags_str = ",".join(tags) if tags else ""
+
+            cursor.execute(
+                """
+                UPDATE sentence
+                SET sentence = ?, nos = ?, tags = ?
+                WHERE id = ?
+            """,
+                (sentence, nos_str, tags_str, sentence_id),
+            )
+
+    def delete_sentence(self, sentence_id: int):
+        """删除句子"""
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                "DELETE FROM example_sentence WHERE sentence_id = ?", (sentence_id,)
+            )
+            cursor.execute("DELETE FROM sentence WHERE id = ?", (sentence_id,))
 
     # ExampleSentence CRUD
     def create_example_sentence(
@@ -446,6 +531,47 @@ class Database:
             cursor.execute("DELETE FROM question WHERE paper_id = ?", (paper_id,))
             cursor.execute("DELETE FROM paper WHERE id = ?", (paper_id,))
 
+    # 初始化数据（从"所有句子.md"导入）
+    def import_from_markdown(self, md_file: str):
+        """从Markdown文件导入句子数据"""
+        import re
+
+        # 句子字典，用于处理重复
+        sentences_dict = {}
+
+        with open(md_file, "r", encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+
+                # 匹配格式：序号. 句子内容
+                match = re.match(r"^(\d+)\.\s+(.+)$", line)
+                if match:
+                    no = int(match.group(1))
+                    sentence = match.group(2).strip()
+
+                    # 如果句子已存在，追加序号
+                    if sentence in sentences_dict:
+                        sentences_dict[sentence].append(no)
+                    else:
+                        sentences_dict[sentence] = [no]
+
+        # 导入到数据库
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+
+            for sentence, nos in sentences_dict.items():
+                nos_str = ",".join(map(str, nos))
+                cursor.execute(
+                    """
+                    INSERT OR IGNORE INTO sentence (sentence, nos, tags)
+                    VALUES (?, ?, ?)
+                """,
+                    (sentence, nos_str, ""),
+                )
+        print(f"成功导入 {len(sentences_dict)} 个句子")
+
     # 初始化数据（从JSON导入）
     def import_from_json(self, json_file: str):
         """从JSON文件导入数据"""
@@ -471,31 +597,45 @@ class Database:
                     ),
                 )
 
-            # 导入 exampleSentences
+            # 导入 exampleSentences（现在需要先找到句子ID）
             for es in data["exampleSentences"]:
+                # 首先查找句子ID
                 cursor.execute(
-                    """
-                    INSERT OR IGNORE INTO example_sentence (id, sentence, empty_word)
-                    VALUES (?, ?, ?)
-                """,
-                    (es["id"], es["sentence"], es["emptyWord"]),
+                    "SELECT id FROM sentence WHERE sentence = ?", (es["sentence"],)
                 )
+                sentence_row = cursor.fetchone()
 
-                # 创建句子-用法关联
-                cursor.execute(
-                    """
-                    INSERT OR IGNORE INTO sentence_action (sentence_id, action_id)
-                    VALUES (?, ?)
-                """,
-                    (es["id"], es["actionId"]),
-                )
+                if sentence_row:
+                    sentence_id = sentence_row[0]
+                    cursor.execute(
+                        """
+                        INSERT OR IGNORE INTO example_sentence (id, sentence_id, empty_word)
+                        VALUES (?, ?, ?)
+                    """,
+                        (es["id"], sentence_id, es["emptyWord"]),
+                    )
+
+                    # 创建句子-用法关联
+                    cursor.execute(
+                        """
+                        INSERT OR IGNORE INTO sentence_action (sentence_id, action_id)
+                        VALUES (?, ?)
+                    """,
+                        (es["id"], es["actionId"]),
+                    )
 
 
 if __name__ == "__main__":
     db = Database()
     # 导入初始数据
     try:
+        # 先导入所有句子
+        db.import_from_markdown("parse/所有句子.md")
+        # 再导入虚词数据和例句关联
         db.import_from_json("parse/虚词数据.json")
         print("数据导入成功")
     except Exception as e:
         print(f"数据导入失败: {e}")
+        import traceback
+
+        traceback.print_exc()

@@ -111,10 +111,16 @@ class EmptyWordAction:
     partOfSpeech: PartOfSpeech
     action: str
     translation: str
+
+class Sentence:
+    id:str
+    no:list[int]
+    tags: list[str]
+
+
 # 例句
 class ExampleSentence:
-    sentence: str # 例句
-    tag: list[str] # 标签
+    sentence_id: str # 例句ID
     emptyWord: List[EmptyWordAction] # 虚词作用
 
 # 题目
