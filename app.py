@@ -50,13 +50,34 @@ db = get_db()
 # 主界面
 st.title("虚词练习生成器")
 
+# 初始化 session state
+if "filter_words" not in st.session_state:
+    st.session_state.filter_words = list(EMPTY_WORDS)
+
+
+def select_all_words():
+    st.session_state.filter_words = list(EMPTY_WORDS)
+
+
+def clear_all_words():
+    st.session_state.filter_words = []
+
+
 # 筛选条件
 st.markdown("### 选择虚词和题目数量")
 
 col1, col2 = st.columns(2)
 with col1:
-    filter_empty_words = st.multiselect(
-        "选择虚词（可多选）", EMPTY_WORDS, default=EMPTY_WORDS, key="filter_words"
+    # 全选/清空按钮
+    sub_col1, sub_col2, _ = st.columns([1, 1, 3])
+    with sub_col1:
+        st.button("全选", on_click=select_all_words, key="btn_select_all")
+    with sub_col2:
+        st.button("清空", on_click=clear_all_words, key="btn_clear_all")
+
+    # 使用 st.pills 替代 multiselect，实现更佳的 tags 交互
+    filter_empty_words = st.pills(
+        "选择虚词（可多选）", EMPTY_WORDS, selection_mode="multi", key="filter_words"
     )
 with col2:
     st.markdown("**题目数量**")
