@@ -290,25 +290,28 @@ class Database:
             return sentence_id
 
     def get_all_example_sentences(
-        self, empty_word: Optional[str] = None, action_id: Optional[int] = None
+        self, empty_words: List[str] = None, action_id: Optional[int] = None
     ):
         """获取所有例句"""
         with self.get_connection() as conn:
             cursor = conn.cursor()
             query = """
                 SELECT es.*, 
+                       s.sentence,
                        GROUP_CONCAT(DISTINCT ewa.id) as action_ids,
                        GROUP_CONCAT(DISTINCT ewa.action) as actions
                 FROM example_sentence es
+                LEFT JOIN sentence s ON es.sentence_id = s.id
                 LEFT JOIN sentence_action sa ON es.id = sa.sentence_id
                 LEFT JOIN empty_word_action ewa ON sa.action_id = ewa.id
             """
             params = []
             conditions = []
 
-            if empty_word:
-                conditions.append("es.empty_word = ?")
-                params.append(empty_word)
+            if empty_words:
+                placeholders = ",".join(["?"] * len(empty_words))
+                conditions.append(f"es.empty_word IN ({placeholders})")
+                params.extend(empty_words)
             if action_id:
                 conditions.append("sa.action_id = ?")
                 params.append(action_id)
@@ -533,11 +536,15 @@ class Database:
 
     # 初始化数据（从"所有句子.md"导入）
     def import_from_markdown(self, md_file: str):
-        """从Markdown文件导入句子数据"""
+        """从Markdown文件导入句子数据，并进行深度去重"""
         import re
 
+        def normalize_text(text):
+            return re.sub(r"[^\w\u4e00-\u9fa5]", "", text)
+
         # 句子字典，用于处理重复
-        sentences_dict = {}
+        # key: normalized_text, value: {sentence: original_text, nos: [], tags: []}
+        temp_sentences = {}
 
         with open(md_file, "r", encoding="utf-8") as f:
             for line in f:
@@ -550,18 +557,50 @@ class Database:
                 if match:
                     no = int(match.group(1))
                     sentence = match.group(2).strip()
+                    norm_text = normalize_text(sentence)
 
-                    # 如果句子已存在，追加序号
-                    if sentence in sentences_dict:
-                        sentences_dict[sentence].append(no)
+                    if norm_text in temp_sentences:
+                        # 如果已存在，保留长度较长的版本
+                        if len(sentence) > len(temp_sentences[norm_text]["sentence"]):
+                            temp_sentences[norm_text]["sentence"] = sentence
+                        temp_sentences[norm_text]["nos"].append(no)
                     else:
-                        sentences_dict[sentence] = [no]
+                        temp_sentences[norm_text] = {
+                            "sentence": sentence,
+                            "nos": [no],
+                            "tags": [],
+                        }
+
+        # 处理包含关系（子集去重）
+        # 先按长度降序排序
+        sorted_items = sorted(
+            temp_sentences.items(),
+            key=lambda x: len(normalize_text(x[1]["sentence"])),
+            reverse=True,
+        )
+
+        final_sentences_dict = {}  # key: sentence (original), value: nos
+        kept_normalized_texts = []
+
+        for norm_text, data in sorted_items:
+            # 检查是否是已保留句子的子集
+            is_subset = False
+            for kept_norm in kept_normalized_texts:
+                if norm_text in kept_norm:
+                    is_subset = True
+                    break
+
+            if not is_subset:
+                final_sentences_dict[data["sentence"]] = data["nos"]
+                kept_normalized_texts.append(norm_text)
+            else:
+                print(f"Skipping subset sentence: {data['sentence']}")
 
         # 导入到数据库
         with self.get_connection() as conn:
             cursor = conn.cursor()
 
-            for sentence, nos in sentences_dict.items():
+            for sentence, nos in final_sentences_dict.items():
                 nos_str = ",".join(map(str, nos))
                 cursor.execute(
                     """
@@ -570,18 +609,31 @@ class Database:
                 """,
                     (sentence, nos_str, ""),
                 )
-        print(f"成功导入 {len(sentences_dict)} 个句子")
+        print(f"成功导入 {len(final_sentences_dict)} 个去重后的句子")
 
     # 初始化数据（从JSON导入）
     def import_from_json(self, json_file: str):
         """从JSON文件导入数据"""
+        print("暂时跳过 JSON 数据导入（数据文件缺失）")
+        return
+        # 原有的导入逻辑暂时注释掉
+        """
+        import re
+
+        def normalize_text(text):
+            # 去除所有空白和标点符号
+            return re.sub(r"[^\w\u4e00-\u9fa5]", "", text)
+
         with open(json_file, "r", encoding="utf-8") as f:
             data = json.load(f)
+        
+        # ... (rest of the code)
+        """
 
         with self.get_connection() as conn:
             cursor = conn.cursor()
 
-            # 导入 emptyWordActions
+            # 1. 导入 emptyWordActions（虚词定义）
             for ewa in data["emptyWordActions"]:
                 cursor.execute(
                     """
@@ -597,16 +649,79 @@ class Database:
                     ),
                 )
 
-            # 导入 exampleSentences（现在需要先找到句子ID）
-            for es in data["exampleSentences"]:
-                # 首先查找句子ID
-                cursor.execute(
-                    "SELECT id FROM sentence WHERE sentence = ?", (es["sentence"],)
-                )
-                sentence_row = cursor.fetchone()
+            # 添加一个默认的 UNKNOWN 动作，ID 0
+            cursor.execute(
+                """
+                INSERT OR IGNORE INTO empty_word_action (id, empty_word, part_of_speech, action, translation)
+                VALUES (0, 'UNKNOWN', 'UNKNOWN', '待补充', '')
+                """
+            )
 
-                if sentence_row:
-                    sentence_id = sentence_row[0]
+            # 2. 获取所有现有句子（已从markdown导入），构建 normalized -> id 映射
+            cursor.execute("SELECT id, sentence FROM sentence")
+            sentence_rows = cursor.fetchall()
+            sentence_map = {
+                normalize_text(row["sentence"]): row["id"] for row in sentence_rows
+            }
+            existing_sentences_set = set(sentence_map.keys())
+
+            # 3. 导入 JSON 中的 exampleSentences (已知配置的句子)
+            # 同时记录哪些句子已经被配置了
+            configured_sentences_set = set()
+
+            for es in data["exampleSentences"]:
+                normalized_sentence = normalize_text(es["sentence"])
+
+                # 尝试查找句子ID
+                sentence_id = None
+
+                # 1. 精确匹配
+                if normalized_sentence in sentence_map:
+                    sentence_id = sentence_map[normalized_sentence]
+                else:
+                    # 2. 尝试模糊匹配/包含匹配
+                    # 遍历所有现有句子，检查 JSON 句子是否是现有句子的子集
+                    # 或者现有句子是 JSON 句子的子集（如果是后者，可能需要更新数据库，但简单起见我们优先保留已有的长句子）
+
+                    best_match_id = None
+                    best_match_len = 0
+
+                    for existing_norm, existing_id in sentence_map.items():
+                        # Case A: JSON 句子是现有句子的子集 (e.g. JSON="仰观宇宙", DB="仰观宇宙之大")
+                        if normalized_sentence in existing_norm:
+                            # 找到了一个父句子，使用这个父句子ID
+                            sentence_id = existing_id
+                            break
+
+                        # Case B: 现有句子是 JSON 句子的子集 (e.g. JSON="仰观宇宙之大", DB="仰观宇宙")
+                        # 这种情况比较少见，因为我们已经导入了最完整的 Markdown 数据
+                        # 但如果发生了，我们可以认为匹配上了，但继续使用数据库里的那个（为了ID稳定性）
+                        if existing_norm in normalized_sentence:
+                            # 找到了一个子句子，暂时记录下来，如果没找到父句子，就用这个
+                            if len(existing_norm) > best_match_len:
+                                best_match_id = existing_id
+                                best_match_len = len(existing_norm)
+
+                    if not sentence_id and best_match_id:
+                        sentence_id = best_match_id
+
+                    if not sentence_id:
+                        # 3. 确实找不到，且没有包含关系
+                        # 策略修改：严格只使用 Markdown 中的句子，不从 JSON 插入新句子
+                        # print(f"Info: Skipping JSON-only sentence (not in markdown): {es['sentence']}")
+                        pass
+
+                # 记录配置
+                if sentence_id:
+                    # 获取该ID对应的标准化文本（可能是长句子的）
+                    cursor.execute(
+                        "SELECT sentence FROM sentence WHERE id = ?", (sentence_id,)
+                    )
+                    row = cursor.fetchone()
+                    if row:
+                        actual_sentence = row[0]
+                        configured_sentences_set.add(normalize_text(actual_sentence))
+
                     cursor.execute(
                         """
                         INSERT OR IGNORE INTO example_sentence (id, sentence_id, empty_word)
@@ -615,14 +730,79 @@ class Database:
                         (es["id"], sentence_id, es["emptyWord"]),
                     )
 
-                    # 创建句子-用法关联
-                    cursor.execute(
-                        """
-                        INSERT OR IGNORE INTO sentence_action (sentence_id, action_id)
-                        VALUES (?, ?)
-                    """,
-                        (es["id"], es["actionId"]),
-                    )
+                # 创建句子-用法关联
+                cursor.execute(
+                    """
+                    INSERT OR IGNORE INTO sentence_action (sentence_id, action_id)
+                    VALUES (?, ?)
+                """,
+                    (es["id"], es["actionId"]),
+                )
+
+            # 4. 遍历检查所有 MD 中的句子，找出未配置的句子
+            # 自动识别其中的虚词，并添加为默认配置（action_id=0）
+            EMPTY_WORDS = [
+                "而",
+                "何",
+                "乎",
+                "乃",
+                "其",
+                "且",
+                "若",
+                "所",
+                "为",
+                "焉",
+                "也",
+                "以",
+                "因",
+                "于",
+                "与",
+                "则",
+                "者",
+                "之",
+            ]
+
+            count_auto_added = 0
+            for row in sentence_rows:
+                original_text = row["sentence"]
+                norm_text = normalize_text(original_text)
+
+                if norm_text not in configured_sentences_set:
+                    # 这是一个未配置的句子
+                    # 自动检测包含哪些虚词
+                    found_words = []
+                    for word in EMPTY_WORDS:
+                        if word in original_text:
+                            found_words.append(word)
+
+                    if found_words:
+                        sentence_id = row["id"]
+                        print(
+                            f"Auto-configuring sentence: {original_text} -> Found: {found_words}"
+                        )
+
+                        for word in found_words:
+                            # 插入 example_sentence
+                            cursor.execute(
+                                "INSERT INTO example_sentence (sentence_id, empty_word) VALUES (?, ?)",
+                                (sentence_id, word),
+                            )
+                            es_id = cursor.lastrowid
+
+                            # 插入关联，使用默认ID 0
+                            cursor.execute(
+                                "INSERT INTO sentence_action (sentence_id, action_id) VALUES (?, 0)",
+                                (es_id,),
+                            )
+                        count_auto_added += 1
+                    else:
+                        print(
+                            f"Skipping sentence (no empty words found): {original_text}"
+                        )
+
+            print(
+                f"自动补充了 {count_auto_added} 个未配置句子的虚词记录（Action ID = 0）"
+            )
 
 
 if __name__ == "__main__":

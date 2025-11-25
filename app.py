@@ -8,13 +8,12 @@ from datetime import datetime
 import streamlit as st
 from docx import Document
 from docx.enum.text import WD_ALIGN_PARAGRAPH
-from docx.shared import Inches
 
 from database import Database
 
 # 页面配置必须在所有 Streamlit 命令之前
 st.set_page_config(
-    page_title="虚词大战 - 教师端", layout="wide", initial_sidebar_state="expanded"
+    page_title="虚词练习生成器", layout="wide", initial_sidebar_state="expanded"
 )
 
 # 虚词列表
@@ -39,42 +38,6 @@ EMPTY_WORDS = [
     "之",
 ]
 
-# 词性列表（存储用英文）
-PART_OF_SPEECH = [
-    "VERB",
-    "NOUN",
-    "ADJECTIVE",
-    "ADVERB",
-    "PREPOSITION",
-    "CONJUNCTION",
-    "PRONOUN",
-    "ARTICLE",
-    "PARTICLE",
-    "AUXILIARY",
-]
-
-# 词性英文到中文的映射
-PART_OF_SPEECH_ZH = {
-    "VERB": "动词",
-    "NOUN": "名词",
-    "ADJECTIVE": "形容词",
-    "ADVERB": "副词",
-    "PREPOSITION": "介词",
-    "CONJUNCTION": "连词",
-    "PRONOUN": "代词",
-    "ARTICLE": "冠词",
-    "PARTICLE": "语气词",
-    "AUXILIARY": "助词",
-}
-
-# 词性中文到英文的映射（反向）
-PART_OF_SPEECH_EN = {v: k for k, v in PART_OF_SPEECH_ZH.items()}
-
-
-def get_pos_display(pos_code: str) -> str:
-    """获取词性的中文显示"""
-    return PART_OF_SPEECH_ZH.get(pos_code, pos_code)
-
 
 # 初始化数据库
 @st.cache_resource
@@ -84,828 +47,145 @@ def get_db():
 
 db = get_db()
 
-# 侧边栏
-st.sidebar.title("虚词大战")
-st.sidebar.markdown("---")
+# 主界面
+st.title("虚词练习生成器")
 
-page = st.sidebar.radio(
-    "选择功能", ["数据管理", "例句管理", "试卷生成", "试卷列表", "句子管理"], index=4
-)
+# 筛选条件
+st.markdown("### 选择虚词和题目数量")
 
-if page == "数据管理":
-    st.title("虚词用法管理")
-
-    tab1, tab2 = st.tabs(["查看所有", "添加新用法"])
-
-    with tab1:
-        # 筛选条件
-        col1, col2 = st.columns(2)
-        with col1:
-            filter_empty_word = st.selectbox("筛选虚词", [None] + EMPTY_WORDS)
-        with col2:
-            col2.markdown("<br>", unsafe_allow_html=True)
-            if st.button("清除筛选"):
-                filter_empty_word = None
-                st.rerun()
-
-        # 获取数据
-        actions = db.get_all_empty_word_actions(filter_empty_word)
-
-        st.markdown(f"### 共 {len(actions)} 个虚词用法")
-
-        # 显示表格
-        for action in actions:
-            pos_display = get_pos_display(action["part_of_speech"])
-            with st.expander(
-                f"{action['empty_word']} - {action['action']} ({pos_display})"
-            ):
-                col1, col2, col3 = st.columns([3, 1, 1])
-
-                with col1:
-                    st.markdown(f"**虚词**: {action['empty_word']}")
-                    st.markdown(f"**词性**: {pos_display}")
-                    st.markdown(f"**用法**: {action['action']}")
-                    st.markdown(f"**翻译**: {action['translation']}")
-
-                with col2:
-                    pass
-
-                with col3:
-                    if st.button("删除", key=f"delete_{action['id']}"):
-                        db.delete_empty_word_action(action["id"])
-                        st.success("已删除")
-                        st.rerun()
-
-                # 内联编辑
-                st.markdown("**修改**:")
-                with st.form(key=f"edit_form_{action['id']}"):
-                    col_empty, col_pos = st.columns(2)
-                    with col_empty:
-                        edit_empty_word = st.selectbox(
-                            "虚词",
-                            EMPTY_WORDS,
-                            index=EMPTY_WORDS.index(action["empty_word"]),
-                            key=f"ew_{action['id']}",
-                        )
-                    with col_pos:
-                        # 显示中文，但存储英文
-                        pos_options_zh = [
-                            get_pos_display(pos) for pos in PART_OF_SPEECH
-                        ]
-                        selected_zh = get_pos_display(action["part_of_speech"])
-                        edit_part_of_speech_zh = st.selectbox(
-                            "词性",
-                            pos_options_zh,
-                            index=pos_options_zh.index(selected_zh)
-                            if selected_zh in pos_options_zh
-                            else 0,
-                            key=f"pos_{action['id']}",
-                        )
-                        edit_part_of_speech = PART_OF_SPEECH_EN[edit_part_of_speech_zh]
-                    edit_action = st.text_input(
-                        "用法", action["action"], key=f"act_{action['id']}"
-                    )
-                    edit_translation = st.text_input(
-                        "翻译", action["translation"], key=f"trans_{action['id']}"
-                    )
-                    if st.form_submit_button("更新"):
-                        db.update_empty_word_action(
-                            action["id"],
-                            edit_empty_word,
-                            edit_part_of_speech,
-                            edit_action,
-                            edit_translation,
-                        )
-                        st.success("已更新")
-                        st.rerun()
-
-    with tab2:
-        st.markdown("### 添加新虚词用法")
-
-        col1, col2 = st.columns(2)
-        with col1:
-            new_empty_word = st.selectbox("虚词", EMPTY_WORDS)
-            pos_options_zh = [get_pos_display(pos) for pos in PART_OF_SPEECH]
-            new_part_of_speech_zh = st.selectbox("词性", pos_options_zh)
-            new_part_of_speech = PART_OF_SPEECH_EN[new_part_of_speech_zh]
-        with col2:
-            new_action = st.text_input("用法")
-            new_translation = st.text_input("翻译（可选）")
-
-        if st.button("添加"):
-            if new_action:
-                action_id = db.create_empty_word_action(
-                    new_empty_word, new_part_of_speech, new_action, new_translation
-                )
-                st.success(f"添加成功，ID: {action_id}")
-                st.rerun()
-            else:
-                st.error("用法不能为空")
-
-elif page == "例句管理":
-    st.title("例句管理")
-
-    tab1, tab2 = st.tabs(["例句列表", "批量添加"])
-
-    with tab1:
-        # 筛选条件
-        col1, col2 = st.columns(2)
-        with col1:
-            filter_empty_word = st.selectbox(
-                "筛选虚词", [None] + EMPTY_WORDS, key="filter_word"
-            )
-        with col2:
-            col2.markdown("<br>", unsafe_allow_html=True)
-            if st.button("清除筛选"):
-                filter_empty_word = None
-                st.rerun()
-
-        sentences = db.get_all_example_sentences(filter_empty_word)
-        st.markdown(f"### 共 {len(sentences)} 个例句")
-
-        for sentence in sentences:
-            with st.expander(f"{sentence['sentence'][:50]}..."):
-                st.markdown(f"**例句**: {sentence['sentence']}")
-                st.markdown(f"**虚词**: {sentence['empty_word']}")
-                if sentence["actions"]:
-                    st.markdown(f"**用法**: {', '.join(sentence['actions'])}")
-                if sentence["tags"]:
-                    st.markdown(f"**标签**: {sentence['tags']}")
-
-                col1, col2 = st.columns([3, 1])
-                with col1:
-                    if st.button("删除", key=f"del_s_{sentence['id']}"):
-                        db.delete_example_sentence(sentence["id"])
-                        st.success("已删除")
-                        st.rerun()
-
-    with tab2:
-        st.markdown("### 批量添加例句")
-
-        sentence_input = st.text_area(
-            "输入例句（每行一句）",
-            height=200,
-            placeholder="例如：\n蟹六跪而二螯\n青，取之于蓝，而青于蓝",
-        )
-
-        if st.button("自动识别并添加"):
-            if sentence_input:
-                lines = [
-                    line.strip() for line in sentence_input.split("\n") if line.strip()
-                ]
-                added_count = 0
-
-                progress_bar = st.progress(0)
-                status_text = st.empty()
-
-                for i, line in enumerate(lines):
-                    # 检测虚词
-                    empty_words = db.detect_empty_words_in_sentence(line)
-
-                    if empty_words:
-                        # 为每个虚词查找可用的用法
-                        for empty_word in empty_words:
-                            actions = db.get_all_empty_word_actions(empty_word)
-                            if actions:
-                                # 默认选择第一个用法
-                                action_id = actions[0]["id"]
-                                tags = [f"batch_{datetime.now().strftime('%Y%m%d')}"]
-
-                                try:
-                                    db.create_example_sentence(
-                                        line, tags, empty_word, [action_id]
-                                    )
-                                    added_count += 1
-                                except Exception as e:
-                                    st.warning(f"添加失败: {line} - {str(e)}")
-
-                    progress_bar.progress((i + 1) / len(lines))
-                    status_text.text(f"处理中: {i + 1}/{len(lines)}")
-
-                progress_bar.empty()
-                status_text.empty()
-
-                st.success(f"成功添加 {added_count} 个例句")
-            else:
-                st.error("请输入例句")
-
-        st.markdown("### 手动添加单句")
-
-        col1, col2 = st.columns(2)
-        with col1:
-            manual_sentence = st.text_input("例句")
-            manual_tags = st.text_input(
-                "标签（用逗号分隔）", placeholder="例如: 常见,重要"
-            )
-        with col2:
-            manual_empty_word = st.selectbox("虚词", EMPTY_WORDS)
-            manual_actions = db.get_all_empty_word_actions(manual_empty_word)
-
-            if manual_actions:
-                manual_action_ids = st.multiselect(
-                    "选择用法",
-                    manual_actions,
-                    format_func=lambda x: f"{x['action']} ({get_pos_display(x['part_of_speech'])})",
-                    key="manual_actions",
-                )
-
-        if st.button("添加单句"):
-            if manual_sentence and manual_action_ids:
-                tags = (
-                    [tag.strip() for tag in manual_tags.split(",") if tag.strip()]
-                    if manual_tags
-                    else []
-                )
-                action_ids = [a["id"] for a in manual_action_ids]
-
-                db.create_example_sentence(
-                    manual_sentence, tags, manual_empty_word, action_ids
-                )
-                st.success("添加成功")
-                st.rerun()
-            else:
-                st.error("请填写完整信息")
-
-elif page == "试卷生成":
-    st.title("生成试卷")
-
-    # 筛选条件
-    st.markdown("### 筛选条件")
-
-    col1, col2 = st.columns(2)
-    with col1:
-        # 添加全选选项（默认全选）
-        all_words_plus = ["全选"] + EMPTY_WORDS
-        # 如果没有选择，默认选择"全选"
-        default_words = st.session_state.get("filter_words_gen_default", ["全选"])
-        filter_empty_words_selected = st.multiselect(
-            "虚词", all_words_plus, default=default_words, key="filter_words_gen"
-        )
-
-        # 处理全选逻辑
-        if "全选" in filter_empty_words_selected:
-            filter_empty_words = EMPTY_WORDS
-        else:
-            filter_empty_words = filter_empty_words_selected
-
-        # 获取所有可能的词性
-        all_pos = set()
-        if filter_empty_words:
-            actions = db.get_all_empty_word_actions()
-            for action in actions:
-                if action["empty_word"] in filter_empty_words:
-                    all_pos.add(action["part_of_speech"])
-
-        # 显示中文词性供选择（默认全选）
-        pos_display_options = ["全选"] + sorted(
-            [get_pos_display(pos) for pos in all_pos]
-        )
-        # 默认选择所有词性
-        filter_pos_zh = st.multiselect(
-            "词性", pos_display_options, default=pos_display_options, key="filter_pos"
-        )
-
-        # 处理词性全选逻辑
-        if "全选" in filter_pos_zh and filter_pos_zh:
-            # 选择了全选，获取所有不包含"全选"的词性
-            pos_display_options_filtered = [
-                p for p in pos_display_options if p != "全选"
-            ]
-            # 只转换真实词性，排除"全选"
-            filter_pos = [
-                PART_OF_SPEECH_EN[pos_zh]
-                for pos_zh in pos_display_options_filtered
-                if pos_zh != "全选" and pos_zh in PART_OF_SPEECH_EN
-            ]
-        else:
-            # 转换为英文用于查询，排除"全选"
-            filter_pos = (
-                [
-                    PART_OF_SPEECH_EN[pos_zh]
-                    for pos_zh in filter_pos_zh
-                    if pos_zh != "全选" and pos_zh in PART_OF_SPEECH_EN
-                ]
-                if filter_pos_zh
-                else []
-            )
-
-    with col2:
-        question_count = st.number_input("题目数量", min_value=1, value=30, step=1)
-        paper_title = st.text_input(
-            "试卷标题", value=f"虚词练习 {datetime.now().strftime('%Y-%m-%d')}"
-        )
-
-    # 统一的生成并导出按钮
-    generate_and_export_button = st.button(
-        "📥 生成并导出 Word 试卷", type="primary", use_container_width=True
+col1, col2 = st.columns(2)
+with col1:
+    filter_empty_words = st.multiselect(
+        "选择虚词（可多选）", EMPTY_WORDS, default=EMPTY_WORDS, key="filter_words"
+    )
+with col2:
+    st.markdown("**题目数量**")
+    question_count_option = st.radio(
+        "选择题目数量",
+        options=["10", "15", "20", "30", "所有"],
+        horizontal=True,
+        index=4,
+        key="question_count_option",
     )
 
-    if generate_and_export_button:
-        # 直接导出 Word 的逻辑
-        if question_count > 0:
-            # 获取符合条件的例句
-            sentences = db.get_all_example_sentences()
+# 生成按钮
+if st.button("下载", type="primary", use_container_width=True):
+    if not filter_empty_words:
+        st.error("请至少选择一个虚词")
+    else:
+        # 1. 获取所有符合虚词条件的句子（从 sentence 表模糊匹配）
+        all_sentences = db.get_all_sentences(empty_word_filter=None)
 
-            # 过滤例句
-            filtered_sentences = []
-            for sentence in sentences:
-                if (
-                    filter_empty_words
-                    and sentence["empty_word"] not in filter_empty_words
-                ):
-                    continue
+        # 数据去重处理：基于去除标点后的文本内容去重，并处理包含关系
+        import re
 
-                # 检查词性
-                if filter_pos:
-                    sentence_actions = db.get_all_empty_word_actions(
-                        sentence["empty_word"]
-                    )
-                    if not any(
-                        action["part_of_speech"] in filter_pos
-                        for action in sentence_actions
-                    ):
-                        continue
+        def normalize_text(text):
+            return re.sub(r"[^\w\u4e00-\u9fa5]", "", text)
 
-                filtered_sentences.append(sentence)
-
-            if len(filtered_sentences) == 0:
-                st.error("没有符合条件的例句")
+        # 1. 先进行标准化的精确去重
+        temp_unique_map = {}
+        for s in all_sentences:
+            norm_text = normalize_text(s["sentence"])
+            if norm_text not in temp_unique_map:
+                temp_unique_map[norm_text] = s
             else:
-                # 随机打乱例句顺序（不按数据库顺序）
-                random.shuffle(filtered_sentences)
+                if len(s["sentence"]) > len(temp_unique_map[norm_text]["sentence"]):
+                    temp_unique_map[norm_text] = s
 
-                # 随机选择例句
+        # 2. 处理包含关系（子集去重）
+        sorted_sentences = sorted(
+            temp_unique_map.values(),
+            key=lambda x: len(normalize_text(x["sentence"])),
+            reverse=True,
+        )
+
+        final_unique_sentences = []
+        kept_normalized_texts = []
+
+        for s in sorted_sentences:
+            current_norm = normalize_text(s["sentence"])
+            is_subset = False
+            for kept_norm in kept_normalized_texts:
+                if current_norm in kept_norm:
+                    is_subset = True
+                    break
+            if not is_subset:
+                final_unique_sentences.append(s)
+                kept_normalized_texts.append(current_norm)
+
+        unique_sentences = final_unique_sentences
+        filtered_sentences = []
+        target_words = set(filter_empty_words)
+
+        for s in unique_sentences:
+            found_words = [w for w in target_words if w in s["sentence"]]
+            if found_words:
+                selected_word = random.choice(found_words)
+                filtered_sentences.append(
+                    {
+                        "id": s["id"],
+                        "sentence": s["sentence"],
+                        "empty_word": selected_word,
+                        "nos": s["nos"],
+                        "tags": s["tags"],
+                    }
+                )
+
+        if len(filtered_sentences) == 0:
+            st.error("没有符合条件的例句")
+        else:
+            random.shuffle(filtered_sentences)
+
+            if question_count_option == "所有":
+                selected_sentences = filtered_sentences
+            else:
+                question_count = int(question_count_option)
                 selected_sentences = random.sample(
                     filtered_sentences, min(question_count, len(filtered_sentences))
                 )
 
-                # 为每个句子生成题目（包含选项）
-                questions = []
-                for sentence in selected_sentences:
-                    # 获取正确答案
-                    correct_action_id = (
-                        sentence.get("action_ids", [0])[0]
-                        if sentence.get("action_ids")
-                        else None
-                    )
+            if len(selected_sentences) == 0:
+                st.error("没有可用的题目")
+            else:
+                try:
+                    # 生成 Word 文档
+                    paper_title = f"虚词练习 {datetime.now().strftime('%Y-%m-%d')}"
+                    doc = Document()
 
-                    if correct_action_id:
-                        # 获取3个干扰项（同一个虚词的其他用法）
-                        all_actions = db.get_all_empty_word_actions(
-                            sentence["empty_word"]
-                        )
-                        wrong_actions = [
-                            a for a in all_actions if a["id"] != correct_action_id
-                        ]
-                        options = random.sample(
-                            wrong_actions, min(3, len(wrong_actions))
-                        )
+                    title = doc.add_heading(paper_title, 0)
+                    title.alignment = WD_ALIGN_PARAGRAPH.CENTER
+                    doc.add_paragraph()
 
-                        # 添加正确答案
-                        correct_option = next(
-                            (a for a in all_actions if a["id"] == correct_action_id),
-                            None,
-                        )
-                        if correct_option:
-                            options.append(correct_option)
-                            random.shuffle(options)
+                    for i, sentence_data in enumerate(selected_sentences, 1):
+                        sentence = sentence_data.get("sentence")
+                        empty_word = sentence_data.get("empty_word")
 
-                        questions.append(
-                            {
-                                "sentence_id": sentence["id"],
-                                "action_id": correct_action_id,
-                                "options": [
-                                    {
-                                        "action_id": a["id"],
-                                        "is_correct": a["id"] == correct_action_id,
-                                    }
-                                    for a in options
-                                ],
-                            }
-                        )
+                        if not sentence:
+                            continue
 
-                # 生成包含选项和答案的 Word 文档
-                doc = Document()
+                        para = doc.add_paragraph(f"{i}. ", style="Normal")
+                        para.add_run(sentence)
+                        # para.add_run(f"   [{empty_word}]")
 
-                # 标题
-                title = doc.add_heading(paper_title, 0)
-                title.alignment = WD_ALIGN_PARAGRAPH.CENTER
-                doc.add_paragraph()
+                        # doc.add_paragraph()  # 空行
 
-                # 获取试卷数据用于生成文档
-                paper_data = {
-                    "questions": [
-                        {
-                            "sentence": s["sentence"],
-                            "action_id": s.get("action_ids", [0])[0]
-                            if s.get("action_ids")
-                            else None,
-                            "options": [],
-                        }
-                        for s in selected_sentences[:question_count]
-                    ]
-                }
+                    doc_io = io.BytesIO()
+                    doc.save(doc_io)
+                    doc_bytes = doc_io.getvalue()
+                    doc_io.close()
 
-                # 为每个问题添加选项
-                for i, (sentence_data, q) in enumerate(
-                    zip(selected_sentences, questions), 1
-                ):
-                    sentence = sentence_data["sentence"]
+                    st.success(f"已生成 {len(selected_sentences)} 道题目的试卷")
 
-                    # 题号
-                    para = doc.add_paragraph(f"{i}. ", style="Normal")
-                    para.add_run(sentence)
-
-                    # 添加选项（包含作用和意思）
-                    for j, option_data in enumerate(q["options"], 1):
-                        action_id = option_data["action_id"]
-                        action = db.get_empty_word_action(action_id)
-                        if action:
-                            action_text = action["action"]
-                            translation = action.get("translation", "")
-                            if translation:
-                                option_text = (
-                                    f"{chr(96 + j)}. {action_text}（{translation}）"
-                                )
-                            else:
-                                option_text = f"{chr(96 + j)}. {action_text}"
-
-                            doc.add_paragraph(option_text)
-
-                    doc.add_paragraph()  # 空行
-
-                # 保存到内存并创建试卷
-                doc_io = io.BytesIO()
-                doc.save(doc_io)
-                doc_bytes = doc_io.getvalue()
-
-                # 创建试卷到数据库
-                paper_id = db.create_paper(paper_title, questions)
-
-                st.success(f"试卷已生成并保存到数据库！ID: {paper_id}")
-
-                # 提供下载
-                st.download_button(
-                    "📥 下载试卷",
-                    doc_bytes,
-                    f"{paper_title}.docx",
-                    "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-                    key="export_download",
-                )
-        else:
-            st.error("题目数量必须大于0")
-
-else:  # 试卷列表
-    st.title("试卷列表")
-
-    papers = db.get_all_papers()
-
-    if not papers:
-        st.info("还没有试卷")
-    else:
-        for paper in papers:
-            with st.expander(f"{paper['title']} - {paper['created_at']}"):
-                col1, col2, col3 = st.columns([3, 1, 1])
-
-                with col1:
-                    st.markdown(f"**标题**: {paper['title']}")
-                    st.markdown(f"**题目数**: {paper['question_count']}")
-                    st.markdown(f"**创建时间**: {paper['created_at']}")
-
-                with col2:
-                    if st.button("查看详情", key=f"view_{paper['id']}"):
-                        st.session_state[f"view_paper_id"] = paper["id"]
-                        st.rerun()
-
-                with col3:
-                    if st.button("删除", key=f"del_p_{paper['id']}"):
-                        db.delete_paper(paper["id"])
-                        st.success("已删除")
-                        st.rerun()
-
-        # 查看试卷详情
-        if f"view_paper_id" in st.session_state:
-            paper_id = st.session_state["view_paper_id"]
-            paper = db.get_paper(paper_id)
-
-            st.markdown("---")
-            st.markdown(f"## 试卷: {paper['title']}")
-
-            # 导出选项
-            st.markdown("### 导出选项")
-            col1, col2, col3 = st.columns(3)
-            with col1:
-                show_options = st.checkbox("显示选项", value=False)
-            with col2:
-                show_answer = st.checkbox("显示答案", value=False)
-            with col3:
-                highlight_word = st.checkbox("高亮虚词", value=False)
-
-            # 导出按钮
-            import io
-
-            # 检查是否已经生成文档
-            doc_ready_key = f"doc_ready_{paper_id}"
-
-            if st.button("导出为 Word", key=f"export_btn_{paper_id}"):
-                # 生成文档
-                doc = Document()
-
-                # 标题
-                title = doc.add_heading(paper["title"], 0)
-                title.alignment = WD_ALIGN_PARAGRAPH.CENTER
-
-                # 添加空行
-                doc.add_paragraph()
-
-                # 题目
-                for i, question_data in enumerate(paper["questions"], 1):
-                    # 获取句子
-                    sentence = question_data.get("sentence", "")
-                    action_id = question_data.get("action_id")
-
-                    # 题号
-                    para = doc.add_paragraph(f"{i}. ", style="Normal")
-
-                    # 高亮虚词
-                    if highlight_word and sentence:
-                        # 找到虚词
-                        empty_word = None
-                        for word in EMPTY_WORDS:
-                            if word in sentence:
-                                empty_word = word
-                                break
-
-                        if empty_word:
-                            # 找到虚词在句子中的位置
-                            parts = sentence.split(empty_word, 1)
-                            if parts[0]:
-                                para.add_run(parts[0])
-                            run = para.add_run(empty_word)
-                            run.bold = True
-                            if len(parts) > 1 and parts[1]:
-                                para.add_run(parts[1])
-                        else:
-                            para.add_run(sentence)
-                    else:
-                        if sentence:
-                            para.add_run(sentence)
-
-                    # 选项
-                    if show_options and question_data.get("options"):
-                        options = question_data["options"]
-                        for j, option in enumerate(options, 1):
-                            # 构建选项文本：作用 + 意思
-                            action = option.get("action", "")
-                            translation = option.get("translation", "")
-                            if translation:
-                                option_text = (
-                                    f"{chr(96 + j)}. {action}（{translation}）"
-                                )
-                            else:
-                                option_text = f"{chr(96 + j)}. {action}"
-                            para = doc.add_paragraph(option_text)
-                            para.paragraph_format.left_indent = Inches(0.5)
-
-                    # 答案
-                    if show_answer:
-                        options = question_data.get("options", [])
-                        correct_answer = next(
-                            (opt for opt in options if opt.get("is_correct")), None
-                        )
-                        if correct_answer:
-                            action = correct_answer.get("action", "")
-                            translation = correct_answer.get("translation", "")
-                            if translation:
-                                answer_text = f"答案: {action}（{translation}）"
-                            else:
-                                answer_text = f"答案: {action}"
-                            para = doc.add_paragraph(answer_text)
-                            para.paragraph_format.left_indent = Inches(0.5)
-
-                    # 只有在有选项或答案时才添加空行（默认导出版面更紧凑）
-                    if show_options and question_data.get("options"):
-                        doc.add_paragraph()  # 空行
-                    elif show_answer:
-                        doc.add_paragraph()  # 空行
-
-                # 保存到内存
-                filename = f"{paper['title']}.docx"
-                doc_io = io.BytesIO()
-                doc.save(doc_io)
-                doc_bytes = doc_io.getvalue()
-
-                # 存储到 session_state
-                st.session_state[f"doc_bytes_{paper_id}"] = doc_bytes
-                st.session_state[f"doc_filename_{paper_id}"] = filename
-                st.session_state[doc_ready_key] = True
-
-                st.success("试卷已生成！")
-                st.rerun()
-
-            # 如果文档已生成，显示下载按钮
-            if st.session_state.get(doc_ready_key, False):
-                doc_bytes = st.session_state.get(f"doc_bytes_{paper_id}")
-                doc_filename = st.session_state.get(f"doc_filename_{paper_id}")
-
-                if doc_bytes and doc_filename:
                     st.download_button(
                         "📥 下载试卷",
                         doc_bytes,
-                        doc_filename,
+                        f"{paper_title}.docx",
                         "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-                        key=f"download_btn_{paper_id}",
+                        key="export_download",
                         use_container_width=True,
                     )
+                except Exception as e:
+                    st.error(f"生成 Word 文档时出错: {str(e)}")
+                    import traceback
 
-            # 显示题目预览
-            st.markdown("### 题目预览")
-            for i, question_data in enumerate(paper["questions"], 1):
-                st.markdown(f"#### 第 {i} 题")
-                st.markdown(f"**例句**: {question_data['sentence']}")
-
-                if question_data["options"]:
-                    st.markdown("**选项**:")
-                    for j, option in enumerate(question_data["options"], 1):
-                        # 构建选项文本：作用 + 意思
-                        action = option.get("action", "")
-                        translation = option.get("translation", "")
-                        is_correct = option.get("is_correct", False)
-                        if translation:
-                            option_text = f"{chr(96 + j)}. {action}（{translation}）"
-                        else:
-                            option_text = f"{chr(96 + j)}. {action}"
-
-                        # 添加正确答案标记
-                        if is_correct:
-                            option_text += " ✓"
-
-                        st.markdown(option_text)
-
-if page == "句子管理":
-    st.title("句子管理")
-
-    col_search, col_add = st.columns([2, 1])
-
-    with col_search:
-        # 虚词筛选（多选）
-        filter_empty_words = st.multiselect(
-            "按虚词筛选（可选多个）", EMPTY_WORDS, key="filter_sentence_words"
-        )
-
-    with col_add:
-        st.markdown("<br>", unsafe_allow_html=True)
-        st.markdown("---")
-        with st.expander("添加新句子", expanded=False):
-            new_sentence = st.text_input("句子内容")
-            new_nos = st.text_input("序号（逗号分隔）", placeholder="例如: 1,2,3")
-            new_tags = st.text_input("标签（逗号分隔）", placeholder="例如: 常见,重要")
-
-            if st.button("添加句子"):
-                if new_sentence:
-                    nos_list = (
-                        [int(n.strip()) for n in new_nos.split(",") if n.strip()]
-                        if new_nos
-                        else []
-                    )
-                    tags_list = (
-                        [t.strip() for t in new_tags.split(",") if t.strip()]
-                        if new_tags
-                        else []
-                    )
-                    db.create_sentence(new_sentence, nos_list, tags_list)
-                    st.success("添加成功")
-                    st.rerun()
-                else:
-                    st.error("请输入句子内容")
-
-    # 获取并显示句子列表
-    # 如果有多个虚词筛选，需要合并结果
-    if filter_empty_words:
-        # 收集所有符合任一虚词的句子
-        all_sentences = {}
-        for word in filter_empty_words:
-            for sentence in db.get_all_sentences(word):
-                all_sentences[sentence["id"]] = sentence
-        sentences = list(all_sentences.values())
-    else:
-        sentences = db.get_all_sentences()
-
-    st.markdown(f"### 共 {len(sentences)} 个句子")
-
-    # 导出选项
-    col_export1, col_export2 = st.columns(2)
-    with col_export1:
-        export_count = st.number_input(
-            "导出数量", min_value=1, value=30, step=1, key="sentence_export_count"
-        )
-    with col_export2:
-        export_title = st.text_input(
-            "文档标题", value="句子练习", key="sentence_export_title"
-        )
-
-    if st.button("随机导出到 Word", type="primary", use_container_width=True):
-        if len(sentences) > 0:
-            # 随机选择句子
-            import random
-
-            selected_sentences = random.sample(
-                sentences, min(export_count, len(sentences))
-            )
-
-            # 生成 Word 文档
-            doc = Document()
-
-            # 标题
-            title = doc.add_heading(export_title, 0)
-            title.alignment = WD_ALIGN_PARAGRAPH.CENTER
-            doc.add_paragraph()
-
-            # 添加句子
-            for i, sentence in enumerate(selected_sentences, 1):
-                para = doc.add_paragraph(f"{i}. ", style="Normal")
-                para.add_run(sentence["sentence"])
-
-            # 保存到内存
-            doc_io = io.BytesIO()
-            doc.save(doc_io)
-            doc_bytes = doc_io.getvalue()
-
-            st.success(f"已生成 {len(selected_sentences)} 个句子的Word文档")
-
-            # 提供下载
-            st.download_button(
-                "📥 下载文档",
-                doc_bytes,
-                f"{export_title}.docx",
-                "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-                key="sentence_export_download",
-                use_container_width=True,
-            )
-        else:
-            st.error("没有可导出的句子")
-
-    # 显示句子列表（表格形式）
-    st.markdown("---")
-    st.markdown("### 句子列表")
-
-    if len(sentences) > 0:
-        # 准备表格数据
-        import pandas as pd
-
-        table_data = []
-        for sentence in sentences:
-            table_data.append(
-                {
-                    "ID": sentence["id"],
-                    "句子": sentence["sentence"],
-                    "序号": ", ".join(map(str, sentence["nos"]))
-                    if sentence["nos"]
-                    else "",
-                    "标签": ", ".join(sentence["tags"]) if sentence["tags"] else "",
-                }
-            )
-
-        df = pd.DataFrame(table_data)
-
-        # 显示表格
-        st.dataframe(
-            df,
-            use_container_width=True,
-            hide_index=True,
-            column_config={
-                "ID": st.column_config.NumberColumn("ID", width="small"),
-                "句子": st.column_config.TextColumn("句子", width="large"),
-                "序号": st.column_config.TextColumn("序号", width="medium"),
-                "标签": st.column_config.TextColumn("标签", width="medium"),
-            },
-        )
-
-        # 批量操作
-        with st.expander("批量操作", expanded=False):
-            col_del1, col_del2 = st.columns([3, 1])
-
-            with col_del1:
-                ids_to_delete = st.text_input(
-                    "删除句子ID（逗号分隔）", placeholder="例如: 1,2,3"
-                )
-
-            with col_del2:
-                st.markdown("<br>", unsafe_allow_html=True)
-                if st.button("批量删除", type="secondary"):
-                    if ids_to_delete:
-                        try:
-                            ids = [int(id.strip()) for id in ids_to_delete.split(",")]
-                            deleted_count = 0
-                            for sentence_id in ids:
-                                try:
-                                    db.delete_sentence(sentence_id)
-                                    deleted_count += 1
-                                except Exception:
-                                    pass
-                            st.success(f"已删除 {deleted_count} 个句子")
-                            st.rerun()
-                        except Exception:
-                            st.error("请输入正确的ID格式")
-    else:
-        st.info("没有句子数据")
+                    st.code(traceback.format_exc())
